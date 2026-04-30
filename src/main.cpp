@@ -1,10 +1,7 @@
 #include <Arduino.h>
-
 #include <Servo.h>
-#include <LiquidCrystal_I2C.h>
+#include <lcd1602.h>
 #include <Wire.h>
-
-LiquidCrystal_I2C lcd(0x27, 16, 2);  // Change 0x27 if your LCD address is different
 
 Servo dollServo;
 Servo armServo;
@@ -59,10 +56,149 @@ void updateLightsAndSounds() {
 }
 
 void updateLCD() {
-  lcd.setCursor(0, 0);
-  lcd.print("Time: ");
-  lcd.print(timeLeft);
-  lcd.print("   ");
-  lcd.setCursor(0, 1);
-  lcd.print(isGreenLight ? "GREEN LIGHT" : "RED LIGHT   ");
+  lcd1602SetCursor(0, 0);
+  lcd1602WriteString("Time: ");
+  lcd1602WriteString(timeLeft);
+  lcd1602WriteString("   ");
+  lcd1602SetCursor(0, 1);
+  lcd1602WriteString(isGreenLight ? "GREEN LIGHT" : "RED LIGHT   ");
+}
+
+void startGame() {
+  gameState = 1;
+  timeLeft = 60;
+  isGreenLight = true;
+  currentDuration = greenDuration;
+  lastLightChange = millis();
+  lastSecondTick = millis();
+  ldr1Base = analogRead(ldr1Pin);
+  ldr2Base = analogRead(ldr2Pin);
+  dollServo.write(0);
+  armServo.write(0);
+  updateLightsAndSounds();
+  updateLCD();
+  lcd1602SetCursor(0, 1);
+  lcd1602WriteString("Game Started!  ");
+}
+
+void winGame() {
+  gameState = 2;
+  noTone(buzzerPin);
+  digitalWrite(redLedPin, LOW);
+  digitalWrite(greenLedPin, LOW);
+  lcd1602Clear();
+  lcd1602WriteString("YOU WIN!");
+  lcd1602SetCursor(0, 1);
+  lcd1602WriteString("Press button");
+}
+
+void eliminatePlayer() {
+  gameState = 3;
+  noTone(buzzerPin);
+  digitalWrite(redLedPin, LOW);
+  digitalWrite(greenLedPin, LOW);
+  lcd1602Clear();
+  lcd1602WriteString("ELIMINATED!");
+  armServo.write(120);   // sweep arm to knock player off
+  delay(800);
+  armServo.write(0);     // reset arm
+  lcd1602SetCursor(0, 1);
+  lcd1602WriteString("Press button");
+}
+
+void checkMotionDuringRed() {
+  float currentDist = getDistance();
+  if (abs(currentDist - lastRedDistance) > 2.0) {  // ignore <2 cm noise
+    eliminatePlayer();
+  }
+}
+
+void checkLandmines() {
+  int ldr1 = analogRead(ldr1Pin);
+  int ldr2 = analogRead(ldr2Pin);
+  // "step on and off" = any big change from calibrated base
+  if (abs(ldr1 - ldr1Base) > 150 || abs(ldr2 - ldr2Base) > 150) {
+    eliminatePlayer();
+  }
+}
+
+void resetGame() {
+  gameState = 0;
+  noTone(buzzerPin);
+  digitalWrite(redLedPin, LOW);
+  digitalWrite(greenLedPin, LOW);
+  dollServo.write(0);
+  armServo.write(0);
+  lcd1602Clear();
+  lcd1602WriteString("Press button to");
+  lcd1602SetCursor(0, 1);
+  lcd1602WriteString("start game");
+}
+
+void setup() {
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+  pinMode(buttonPin, INPUT_PULLUP);
+  pinMode(redLedPin, OUTPUT);
+  pinMode(greenLedPin, OUTPUT);
+  pinMode(buzzerPin, OUTPUT);
+
+  dollServo.attach(dollServoPin);
+  armServo.attach(armServoPin);
+
+  lcd1602Init(0x27);
+  lcd1602Control(true, false, false);
+
+  resetGame();
+}
+
+void loop() {
+  // Button handling (start or reset)
+  if (digitalRead(buttonPin) == LOW) {
+    delay(200);  // simple debounce
+    if (gameState == 0) {
+      startGame();
+    } else if (gameState == 2 || gameState == 3) {
+      resetGame();
+    }
+    while (digitalRead(buttonPin) == LOW);  // wait for release
+  }
+
+  if (gameState == 1) {  // PLAYING
+    // Light period timer
+    if (millis() - lastLightChange >= currentDuration) {
+      isGreenLight = !isGreenLight;
+      currentDuration = isGreenLight ? greenDuration : redDuration;
+      lastLightChange = millis();
+      updateLightsAndSounds();
+
+      if (!isGreenLight) {
+        lastRedDistance = getDistance();  // record distance at start of Red
+      }
+    }
+
+    // 1-second countdown
+    if (millis() - lastSecondTick >= 1000) {
+      timeLeft--;
+      lastSecondTick = millis();
+      updateLCD();
+      if (timeLeft <= 0) {
+        eliminatePlayer();
+      }
+    }
+
+    // Win condition
+    float dist = getDistance();
+    if (dist <= 5.0 && dist > 0) {
+      winGame();
+    }
+
+    // Red Light motion check (multiple readings via fast loop)
+    if (!isGreenLight) {
+      checkMotionDuringRed();
+    }
+
+    // Landmine check
+    checkLandmines();
+  }
 }
