@@ -6,12 +6,14 @@
 Servo dollServo;
 Servo armServo;
 
-// ?
-const int buttonPin = 2;
+// Buttons
+const int buttonPin = 2; // Game reset
+const int playerPin = 3; // "walk forward"
+const int manualPin = 4; // manual green/red toggle
 
 // Game state signs
-const int armServoPin = 6;
 const int dollServoPin = 5;
+const int armServoPin = 6;
 const int redLedPin = 7;
 const int greenLedPin = 8;
 
@@ -21,6 +23,9 @@ const int echoPin = 10;
 
 // Buzzer
 const int buzzerPin = 11;
+
+// Motor Relay
+const int relayPin = 13;
 
 // Landmines
 const int ldr1Pin = A0;
@@ -56,33 +61,48 @@ void setup() {
   pinMode(trigPin, OUTPUT);
   pinMode(echoPin, INPUT);
   pinMode(buttonPin, INPUT_PULLUP);
+  pinMode(playerPin, INPUT_PULLUP);
+  pinMode(manualPin, INPUT_PULLUP);
   pinMode(redLedPin, OUTPUT);
   pinMode(greenLedPin, OUTPUT);
   pinMode(buzzerPin, OUTPUT);
+  pinMode(relayPin, OUTPUT);
+
+  digitalWrite(trigPin, LOW);
+  digitalWrite(redLedPin, LOW);
+  digitalWrite(greenLedPin, LOW);
+  digitalWrite(buzzerPin, LOW);
+  digitalWrite(relayPin, LOW);
 
   dollServo.attach(dollServoPin);
   armServo.attach(armServoPin);
 
   lcd1602Init(0x27);
   lcd1602Control(true, false, false);
+
+  digitalWrite(relayPin, HIGH);
+  digitalWrite(relayPin, LOW);
 }
 
 void loop() {
+  lcd1602SetCursor(0, 0);
   lcd1602WriteString(":3");
 
   digitalWrite(redLedPin, HIGH);
   digitalWrite(greenLedPin, HIGH);
   digitalWrite(buzzerPin, HIGH);
 
-  for (int i = 0; i < 255; i++) {
-    armServo.write(i);
-    delay(100);
-  }
+  delay(500);
 
-  for (int i = 0; i < 255; i++) {
-    dollServo.write(i);
-    delay(100);
-  }
+  // for (int i = 0; i < 180; i++) {
+  //   armServo.write(i);
+  //   delay(50);
+  // }
+  //
+  // for (int i = 0; i < 180; i++) {
+  //   dollServo.write(i);
+  //   delay(50);
+  // }
 
   digitalWrite(redLedPin, LOW);
   digitalWrite(greenLedPin, LOW);
@@ -92,4 +112,7 @@ void loop() {
   Serial.println(analogRead(A1));
   Serial.println("mrow");
   Serial.println(getDistance());
+  Serial.println(digitalRead(buttonPin));
+  Serial.println(digitalRead(playerPin));
+  Serial.println(digitalRead(manualPin));
 }
