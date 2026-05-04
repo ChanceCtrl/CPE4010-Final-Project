@@ -1,35 +1,49 @@
 #include <Arduino.h>
 #include <Servo.h>
-#include <lcd1602.h>
 #include <Wire.h>
+#include <lcd1602.h>
 
 Servo dollServo;
 Servo armServo;
 
-const int buttonPin = 2;
-const int trigPin = 9;
-const int echoPin = 10;
+// Buttons
+const int buttonPin = 2; // Game reset
+const int playerPin = 3; // "walk forward"
+const int manualPin = 4; // manual green/red toggle
+
+// Game state signs
 const int dollServoPin = 5;
 const int armServoPin = 6;
 const int redLedPin = 7;
 const int greenLedPin = 8;
+
+// Distance
+const int trigPin = 9;
+const int echoPin = 10;
+
+// Buzzer
 const int buzzerPin = 11;
-const int ldr1Pin = A0;
-const int ldr2Pin = A1;
+
+// Motor Relay
+const int relayPin = 13;
+
+// Landmines
+const int landmine1Pin = A0;
+const int landmine2Pin = A1;
 
 unsigned long lastLightChange = 0;
 unsigned long lastSecondTick = 0;
 bool isGreenLight = true;
-const int greenDuration = 2000;   // 2 sec
-const int redDuration = 3000;     // 3 sec
+const int greenDuration = 2000; // 2 sec
+const int redDuration = 3000;   // 3 sec
 int currentDuration = greenDuration;
 
 int timeLeft = 60;
 float lastRedDistance = 0.0;
-int ldr1Base = 0;
-int ldr2Base = 0;
+int landmine1Base = 0;
+int landmine2Base = 0;
 
-int gameState = 0;  // 0 = idle, 1 = playing, 2 = win, 3 = eliminated
+int gameState = 0; // 0 = idle, 1 = playing, 2 = win, 3 = eliminated
 
 float getDistance() {
   digitalWrite(trigPin, LOW);
@@ -38,20 +52,20 @@ float getDistance() {
   delayMicroseconds(10);
   digitalWrite(trigPin, LOW);
   long duration = pulseIn(echoPin, HIGH);
-  return duration * 0.034 / 2.0;  // cm
+  return duration * 0.034 / 2.0; // cm
 }
 
 void updateLightsAndSounds() {
   if (isGreenLight) {
     digitalWrite(greenLedPin, HIGH);
     digitalWrite(redLedPin, LOW);
-    dollServo.write(0);        // face away
-    tone(buzzerPin, 523);      // low tone (C5)
+    dollServo.write(0);   // face away
+    tone(buzzerPin, 523); // low tone (C5)
   } else {
     digitalWrite(greenLedPin, LOW);
     digitalWrite(redLedPin, HIGH);
-    dollServo.write(180);      // face player
-    tone(buzzerPin, 1047);     // high tone (C6)
+    dollServo.write(180);  // face player
+    tone(buzzerPin, 1047); // high tone (C6)
   }
 }
 
@@ -71,8 +85,8 @@ void startGame() {
   currentDuration = greenDuration;
   lastLightChange = millis();
   lastSecondTick = millis();
-  ldr1Base = analogRead(ldr1Pin);
-  ldr2Base = analogRead(ldr2Pin);
+  landmine1Base = analogRead(landmine1Pin);
+  landmine2Base = analogRead(landmine2Pin);
   dollServo.write(0);
   armServo.write(0);
   updateLightsAndSounds();
@@ -99,25 +113,26 @@ void eliminatePlayer() {
   digitalWrite(greenLedPin, LOW);
   lcd1602Clear();
   lcd1602WriteString("ELIMINATED!");
-  armServo.write(120);   // sweep arm to knock player off
+  armServo.write(120); // sweep arm to knock player off
   delay(800);
-  armServo.write(0);     // reset arm
+  armServo.write(0); // reset arm
   lcd1602SetCursor(0, 1);
   lcd1602WriteString("Press button");
 }
 
 void checkMotionDuringRed() {
   float currentDist = getDistance();
-  if (abs(currentDist - lastRedDistance) > 2.0) {  // ignore <2 cm noise
+  if (abs(currentDist - lastRedDistance) > 2.0) { // ignore <2 cm noise
     eliminatePlayer();
   }
 }
 
 void checkLandmines() {
-  int ldr1 = analogRead(ldr1Pin);
-  int ldr2 = analogRead(ldr2Pin);
+  int landmine1 = analogRead(landmine1Pin);
+  int landmine2 = analogRead(landmine2Pin);
   // "step on and off" = any big change from calibrated base
-  if (abs(ldr1 - ldr1Base) > 150 || abs(ldr2 - ldr2Base) > 150) {
+  if (abs(landmine1 - landmine1Base) > 150 ||
+      abs(landmine2 - landmine2Base) > 150) {
     eliminatePlayer();
   }
 }
@@ -155,16 +170,17 @@ void setup() {
 void loop() {
   // Button handling (start or reset)
   if (digitalRead(buttonPin) == LOW) {
-    delay(200);  // simple debounce
+    delay(200); // simple debounce
     if (gameState == 0) {
       startGame();
     } else if (gameState == 2 || gameState == 3) {
       resetGame();
     }
-    while (digitalRead(buttonPin) == LOW);  // wait for release
+    while (digitalRead(buttonPin) == LOW)
+      ; // wait for release
   }
 
-  if (gameState == 1) {  // PLAYING
+  if (gameState == 1) { // PLAYING
     // Light period timer
     if (millis() - lastLightChange >= currentDuration) {
       isGreenLight = !isGreenLight;
@@ -173,7 +189,7 @@ void loop() {
       updateLightsAndSounds();
 
       if (!isGreenLight) {
-        lastRedDistance = getDistance();  // record distance at start of Red
+        lastRedDistance = getDistance(); // record distance at start of Red
       }
     }
 
