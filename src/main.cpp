@@ -80,17 +80,19 @@ void setup() {
   lcd1602Init(0x27);
   lcd1602Control(true, false, false);
 
-  digitalWrite(relayPin, HIGH);
-  digitalWrite(relayPin, LOW);
+  // digitalWrite(relayPin, HIGH);
+  // digitalWrite(relayPin, LOW);
 }
 
 void loop() {
   lcd1602SetCursor(0, 0);
   lcd1602WriteString(":3");
 
+  delay(500);
+
   digitalWrite(redLedPin, HIGH);
   digitalWrite(greenLedPin, HIGH);
-  digitalWrite(buzzerPin, HIGH);
+  tone(buzzerPin, 100);
 
   delay(500);
 
@@ -106,7 +108,7 @@ void loop() {
 
   digitalWrite(redLedPin, LOW);
   digitalWrite(greenLedPin, LOW);
-  digitalWrite(buzzerPin, LOW);
+  noTone(buzzerPin);
 
   Serial.println(analogRead(A0));
   Serial.println(analogRead(A1));
