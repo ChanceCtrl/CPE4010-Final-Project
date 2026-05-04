@@ -2,160 +2,226 @@
 #include <Servo.h>
 #include <Wire.h>
 #include <lcd1602.h>
+#include <math.h>
 
+enum GameState { IDLE, PLAYING, WIN, ELIMINATED };
+GameState gameState = IDLE;
+
+// Servo objects
 Servo dollServo;
 Servo armServo;
 
-// Buttons
-const int buttonPin = 2; // Game reset
-const int playerPin = 3; // "walk forward"
-const int manualPin = 4; // manual green/red toggle
+// Pins
+const int buttonPin = 2;
+const int playerPin = 3;
 
-// Game state signs
-const int dollServoPin = 5;
-const int armServoPin = 6;
+const int dollServoPin = 6;
+const int armServoPin = 5;
 const int redLedPin = 7;
 const int greenLedPin = 8;
 
-// Distance
 const int trigPin = 9;
 const int echoPin = 10;
 
-// Buzzer
 const int buzzerPin = 11;
+const int relayPin = 12;
 
-// Motor Relay
-const int relayPin = 13;
-
-// Landmines
 const int landmine1Pin = A0;
 const int landmine2Pin = A1;
 
+// Input stuffs
 unsigned long lastLightChange = 0;
 unsigned long lastSecondTick = 0;
+unsigned long lastButtonPress = 0;
+bool lastButtonState = HIGH;
+bool buttonReleased = true;
+
+// Game stuffs
 bool isGreenLight = true;
-const int greenDuration = 2000; // 2 sec
-const int redDuration = 3000;   // 3 sec
+const int greenDuration = 2000;
+const int redDuration = 3000;
 int currentDuration = greenDuration;
 
 int timeLeft = 60;
 float lastRedDistance = 0.0;
+
 int landmine1Base = 0;
 int landmine2Base = 0;
 
-int gameState = 0; // 0 = idle, 1 = playing, 2 = win, 3 = eliminated
+unsigned long armMoveTime = 0;
+bool armMoving = false;
 
-float getDistance() {
+float getDistanceRaw() {
   digitalWrite(trigPin, LOW);
   delayMicroseconds(2);
   digitalWrite(trigPin, HIGH);
   delayMicroseconds(10);
   digitalWrite(trigPin, LOW);
-  long duration = pulseIn(echoPin, HIGH);
-  return duration * 0.034 / 2.0; // cm
+
+  long duration = pulseIn(echoPin, HIGH, 30000); // timeout added
+  if (duration == 0)
+    return 999; // no reading
+
+  return duration * 0.034 / 2.0;
+}
+
+float getDistanceSmooth() {
+  float sum = 0;
+  int valid = 0;
+
+  for (int i = 0; i < 5; i++) {
+    float d = getDistanceRaw();
+    if (d < 400) { // ignore bad readings
+      sum += d;
+      valid++;
+    }
+    delay(5);
+  }
+
+  if (valid == 0)
+    return 999;
+  return sum / valid;
 }
 
 void updateLightsAndSounds() {
   if (isGreenLight) {
     digitalWrite(greenLedPin, HIGH);
     digitalWrite(redLedPin, LOW);
-    dollServo.write(0);   // face away
-    tone(buzzerPin, 523); // low tone (C5)
+    dollServo.write(0);
+    tone(buzzerPin, 523);
   } else {
     digitalWrite(greenLedPin, LOW);
     digitalWrite(redLedPin, HIGH);
-    dollServo.write(180);  // face player
-    tone(buzzerPin, 1047); // high tone (C6)
+    dollServo.write(180);
+    tone(buzzerPin, 1047);
   }
 }
 
 void updateLCD() {
+  if (gameState != PLAYING)
+    return;
+
+  char buffer[16];
   lcd1602SetCursor(0, 0);
-  lcd1602WriteString("Time: ");
-  lcd1602WriteString(timeLeft);
-  lcd1602WriteString("   ");
+  sprintf(buffer, "Time: %d", timeLeft);
+  lcd1602WriteString(buffer);
+
   lcd1602SetCursor(0, 1);
-  lcd1602WriteString(isGreenLight ? "GREEN LIGHT" : "RED LIGHT   ");
+  lcd1602WriteString(isGreenLight ? "GREEN LIGHT     " : "RED LIGHT       ");
 }
 
 void startGame() {
-  gameState = 1;
+  Serial.println("Game Started");
+
+  gameState = PLAYING;
+
   timeLeft = 60;
   isGreenLight = true;
   currentDuration = greenDuration;
+
   lastLightChange = millis();
   lastSecondTick = millis();
+
   landmine1Base = analogRead(landmine1Pin);
   landmine2Base = analogRead(landmine2Pin);
+
   dollServo.write(0);
-  armServo.write(0);
+  armServo.write(17);
+
   updateLightsAndSounds();
-  updateLCD();
+
+  lcd1602SetCursor(0, 0);
+  lcd1602WriteString("                ");
   lcd1602SetCursor(0, 1);
-  lcd1602WriteString("Game Started!  ");
+  lcd1602WriteString("                ");
+  updateLCD();
 }
 
 void winGame() {
-  gameState = 2;
+  Serial.println("YOU WIN");
+
+  gameState = WIN;
+
   noTone(buzzerPin);
   digitalWrite(redLedPin, LOW);
   digitalWrite(greenLedPin, LOW);
-  lcd1602Clear();
-  lcd1602WriteString("YOU WIN!");
+
+  lcd1602SetCursor(0, 0);
+  lcd1602WriteString("YOU WIN!        ");
   lcd1602SetCursor(0, 1);
-  lcd1602WriteString("Press button");
+  lcd1602WriteString("Press button    ");
+
+  delay(50);
 }
 
 void eliminatePlayer() {
-  gameState = 3;
+  Serial.println("ELIMINATED");
+
+  gameState = ELIMINATED;
+
   noTone(buzzerPin);
   digitalWrite(redLedPin, LOW);
   digitalWrite(greenLedPin, LOW);
-  lcd1602Clear();
-  lcd1602WriteString("ELIMINATED!");
-  armServo.write(120); // sweep arm to knock player off
-  delay(800);
-  armServo.write(0); // reset arm
+
+  lcd1602SetCursor(0, 0);
+  lcd1602WriteString("ELIMINATED!     ");
   lcd1602SetCursor(0, 1);
-  lcd1602WriteString("Press button");
+  lcd1602WriteString("Press button    ");
+
+  armServo.write(90);
+  armMoveTime = millis();
+  armMoving = true;
+
+  delay(50);
 }
 
-void checkMotionDuringRed() {
-  float currentDist = getDistance();
-  if (abs(currentDist - lastRedDistance) > 2.0) { // ignore <2 cm noise
+void resetGame() {
+  Serial.println("Reset");
+
+  gameState = IDLE;
+
+  noTone(buzzerPin);
+  digitalWrite(redLedPin, LOW);
+  digitalWrite(greenLedPin, LOW);
+
+  dollServo.write(0);
+  armServo.write(17);
+
+  lcd1602SetCursor(0, 0);
+  lcd1602WriteString("Press button    ");
+  lcd1602SetCursor(0, 1);
+  lcd1602WriteString("to start game   ");
+}
+
+void checkMotionDuringRed(float dist) {
+  if (fabs(dist - lastRedDistance) > 6.0) {
+    Serial.println("Movement detected!");
     eliminatePlayer();
   }
 }
 
 void checkLandmines() {
-  int landmine1 = analogRead(landmine1Pin);
-  int landmine2 = analogRead(landmine2Pin);
-  // "step on and off" = any big change from calibrated base
-  if (abs(landmine1 - landmine1Base) > 150 ||
-      abs(landmine2 - landmine2Base) > 150) {
+  int l1 = analogRead(landmine1Pin);
+  int l2 = analogRead(landmine2Pin);
+
+  if (abs(l1 - landmine1Base) > 400 || abs(l2 - landmine2Base) > 400) {
+    Serial.println("Landmine triggered!");
     eliminatePlayer();
   }
 }
 
-void resetGame() {
-  gameState = 0;
-  noTone(buzzerPin);
-  digitalWrite(redLedPin, LOW);
-  digitalWrite(greenLedPin, LOW);
-  dollServo.write(0);
-  armServo.write(0);
-  lcd1602Clear();
-  lcd1602WriteString("Press button to");
-  lcd1602SetCursor(0, 1);
-  lcd1602WriteString("start game");
-}
-
 void setup() {
+  Serial.begin(9600);
+
   pinMode(trigPin, OUTPUT);
   pinMode(echoPin, INPUT);
+
   pinMode(buttonPin, INPUT_PULLUP);
+  pinMode(playerPin, INPUT_PULLUP);
+
   pinMode(redLedPin, OUTPUT);
   pinMode(greenLedPin, OUTPUT);
+  pinMode(relayPin, OUTPUT);
   pinMode(buzzerPin, OUTPUT);
 
   dollServo.attach(dollServoPin);
@@ -168,53 +234,84 @@ void setup() {
 }
 
 void loop() {
-  // Button handling (start or reset)
-  if (digitalRead(buttonPin) == LOW) {
-    delay(200); // simple debounce
-    if (gameState == 0) {
-      startGame();
-    } else if (gameState == 2 || gameState == 3) {
-      resetGame();
-    }
-    while (digitalRead(buttonPin) == LOW)
-      ; // wait for release
+  bool currentButtonState = digitalRead(buttonPin);
+
+  if (currentButtonState == HIGH) {
+    buttonReleased = true;
   }
 
-  if (gameState == 1) { // PLAYING
-    // Light period timer
-    if (millis() - lastLightChange >= currentDuration) {
-      isGreenLight = !isGreenLight;
-      currentDuration = isGreenLight ? greenDuration : redDuration;
-      lastLightChange = millis();
-      updateLightsAndSounds();
+  if (buttonReleased && lastButtonState == HIGH && currentButtonState == LOW &&
+      millis() - lastButtonPress > 200) {
 
-      if (!isGreenLight) {
-        lastRedDistance = getDistance(); // record distance at start of Red
-      }
+    buttonReleased = false;
+    lastButtonPress = millis();
+
+    if (gameState == IDLE) {
+      startGame();
+    } else if (gameState == WIN || gameState == ELIMINATED) {
+      resetGame();
     }
+  }
 
-    // 1-second countdown
-    if (millis() - lastSecondTick >= 1000) {
-      timeLeft--;
-      lastSecondTick = millis();
-      updateLCD();
-      if (timeLeft <= 0) {
-        eliminatePlayer();
-      }
-    }
+  // Player Mover™
+  if (gameState == PLAYING)
+    digitalWrite(relayPin, !digitalRead(playerPin));
+  else
+    digitalWrite(relayPin, LOW);
 
-    // Win condition
-    float dist = getDistance();
-    if (dist <= 5.0 && dist > 0) {
-      winGame();
-    }
+  // Arm reset
+  if (armMoving && millis() - armMoveTime > 800) {
+    armServo.write(10);
+    armMoving = false;
+  }
 
-    // Red Light motion check (multiple readings via fast loop)
+  // If we aren't play'in, restart the loop
+  if (gameState != PLAYING)
+    return;
+
+  float dist = getDistanceSmooth();
+  Serial.println("Distance: " + String(dist));
+
+  // Joe light switchington
+  if (millis() - lastLightChange >= currentDuration) {
+    isGreenLight = !isGreenLight;
+    currentDuration = isGreenLight ? greenDuration : redDuration;
+    lastLightChange = millis();
+
+    updateLightsAndSounds();
+
     if (!isGreenLight) {
-      checkMotionDuringRed();
+      lastRedDistance = dist;
+      Serial.println("Red baseline: " + String(lastRedDistance));
     }
+  }
 
-    // Landmine check
-    checkLandmines();
+  // 2 lazy 4 metro
+  if (millis() - lastSecondTick >= 1000) {
+    timeLeft--;
+    lastSecondTick = millis();
+
+    updateLCD();
+
+    if (timeLeft <= 0) {
+      eliminatePlayer();
+      return;
+    }
+  }
+
+  // Check logic
+  if (!isGreenLight) {
+    checkMotionDuringRed(dist);
+    if (gameState != PLAYING)
+      return;
+  }
+
+  checkLandmines();
+  if (gameState != PLAYING)
+    return;
+
+  if (dist <= 5.0) {
+    winGame();
+    return;
   }
 }
